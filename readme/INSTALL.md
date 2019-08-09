@@ -71,4 +71,11 @@ After install Anaconda:
     make
     ~~~
 
+6.1 Compiling Corner Pooling Layers
+
+    ~~~
+    cd CenterNet_ROOT/src/lib/models/networks/_cpools
+    python setup.py install
+    ~~~
+
 7. Download pertained models for [detection]() or [pose estimation]() and move them to `$CenterNet_ROOT/models/`. More models can be found in [Model zoo](MODEL_ZOO.md).
