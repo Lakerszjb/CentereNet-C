@@ -79,3 +79,6 @@ After install Anaconda:
     ~~~
 
 7. Download pertained models for [detection]() or [pose estimation]() and move them to `$CenterNet_ROOT/models/`. More models can be found in [Model zoo](MODEL_ZOO.md).
+
+
+-C training: python main --zjb and 'zjb = True' in large_hourglass.py c309
