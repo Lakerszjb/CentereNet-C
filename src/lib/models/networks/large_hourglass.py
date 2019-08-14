@@ -303,12 +303,9 @@ class exkp(nn.Module):
     def forward(self, input):
         # print('image shape', image.shape)
         image = input['input']
-        tl_inds = input['tl_tags']
-        br_inds = input['br_tags']
-        ct_inds = input['ct_tags']
         zjb = True
         inter = self.pre(image)
-        outs  = []
+        outs = []
 
         for ind in range(self.nstack):
             kp_, cnv_  = self.kps[ind], self.cnvs[ind]
@@ -327,7 +324,10 @@ class exkp(nn.Module):
 
             #centernet-T
             if zjb:
-
+                print("CCCCCCCCCCCCC")
+                tl_inds = input['tl_tags']
+                br_inds = input['br_tags']
+                ct_inds = input['ct_tags']
 
                 tl_cnv = self.tl_cnvs[ind](cnv)
                 br_cnv = self.br_cnvs[ind](cnv)
