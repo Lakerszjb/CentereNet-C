@@ -146,3 +146,22 @@ def make_br_layer(dim):
 
 def make_ct_layer(dim):
     return center_pool(dim)
+
+def _nms(heat, kernel=1):
+    pad = (kernel - 1) // 2
+
+    hmax = nn.functional.max_pool2d(heat, (kernel, kernel), stride=1, padding=pad)
+    keep = (hmax == heat).float()
+    return heat * keep
+
+def _topk(scores, K=20):
+    batch, cat, height, width = scores.size()
+
+    topk_scores, topk_inds = torch.topk(scores.view(batch, -1), K)
+
+    topk_clses = (topk_inds / (height * width)).int()
+
+    topk_inds = topk_inds % (height * width)
+    topk_ys   = (topk_inds / width).int().float()
+    topk_xs   = (topk_inds % width).int().float()
+    return topk_scores, topk_inds, topk_clses, topk_ys, topk_xs

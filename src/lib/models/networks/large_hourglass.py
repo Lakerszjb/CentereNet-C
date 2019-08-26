@@ -301,63 +301,116 @@ class exkp(nn.Module):
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, input):
-        # print('image shape', image.shape)
-        image = input['input']
-        zjb = True
-        inter = self.pre(image)
-        outs = []
+        if self.training:
+            # print('image shape', image.shape)
+            image = input['input']
+            zjb = True
+            inter = self.pre(image)
+            outs = []
 
-        for ind in range(self.nstack):
-            kp_, cnv_  = self.kps[ind], self.cnvs[ind]
-            kp  = kp_(inter)
-            cnv = cnv_(kp)
+            for ind in range(self.nstack):
+                kp_, cnv_  = self.kps[ind], self.cnvs[ind]
+                kp  = kp_(inter)
+                cnv = cnv_(kp)
 
-            out = {}
+                out = {}
 
+                if zjb:
+                    self.heads = {'hps': 34,'hm_hp': 17, 'hp_offset': 2}
+
+                for head in self.heads:
+                    layer = self.__getattr__(head)[ind]
+                    y = layer(cnv)
+                    out[head] = y
+
+                #centernet-T
+                if zjb:
+                    tl_inds = input['tl_tags']
+                    br_inds = input['br_tags']
+                    ct_inds = input['ct_tags']
+
+                    tl_cnv = self.tl_cnvs[ind](cnv)
+                    br_cnv = self.br_cnvs[ind](cnv)
+                    ct_cnv = self.ct_cnvs[ind](cnv)
+
+                    tl_heat, br_heat, ct_heat = self.tl_heats[ind](tl_cnv), self.br_heats[ind](br_cnv), self.ct_heats[ind](ct_cnv)
+                    tl_tag, br_tag        = self.tl_tags[ind](tl_cnv),  self.br_tags[ind](br_cnv)
+                    tl_regr, br_regr, ct_regr = self.tl_regrs[ind](tl_cnv), self.br_regrs[ind](br_cnv), self.ct_regrs[ind](ct_cnv)
+
+                    tl_tag  = _tranpose_and_gather_feat(tl_tag, tl_inds)
+                    br_tag  = _tranpose_and_gather_feat(br_tag, br_inds)
+                    tl_regr = _tranpose_and_gather_feat(tl_regr, tl_inds)
+                    br_regr = _tranpose_and_gather_feat(br_regr, br_inds)
+                    ct_regr = _tranpose_and_gather_feat(ct_regr, ct_inds)
+
+                    out['tl_heat'] = tl_heat
+                    out['br_heat'] = br_heat
+                    out['ct_heat'] = ct_heat
+                    out['tl_tag'] = tl_tag
+                    out['br_tag'] = br_tag
+                    out['tl_regr'] = tl_regr
+                    out['br_regr'] = br_regr
+                    out['ct_regr'] = ct_regr
+                
+                outs.append(out)
+                if ind < self.nstack - 1:
+                    inter = self.inters_[ind](inter) + self.cnvs_[ind](cnv)
+                    inter = self.relu(inter)
+                    inter = self.inters[ind](inter)
+            return outs
+        else:
+            # print('image shape', image.shape)
+            image = input['input']
+            zjb = True
+            # image = input
+            # zjb = False
+            inter = self.pre(image)
+            outs = []
+
+            for ind in range(self.nstack):
+                kp_, cnv_  = self.kps[ind], self.cnvs[ind]
+                kp  = kp_(inter)
+                cnv = cnv_(kp)
+
+                out = {}
+
+                if zjb:
+                    self.heads = {'hps': 34,'hm_hp': 17, 'hp_offset': 2}
+
+                for head in self.heads:
+                    layer = self.__getattr__(head)[ind]
+                    y = layer(cnv)
+                    out[head] = y
+
+                #centernet-T
+                if zjb:
+
+                    tl_cnv = self.tl_cnvs[ind](cnv)
+                    br_cnv = self.br_cnvs[ind](cnv)
+                    ct_cnv = self.ct_cnvs[ind](cnv)
+
+                    tl_heat, br_heat, ct_heat = self.tl_heats[ind](tl_cnv), self.br_heats[ind](br_cnv), self.ct_heats[ind](ct_cnv)
+                    tl_tag, br_tag        = self.tl_tags[ind](tl_cnv),  self.br_tags[ind](br_cnv)
+                    tl_regr, br_regr, ct_regr = self.tl_regrs[ind](tl_cnv), self.br_regrs[ind](br_cnv), self.ct_regrs[ind](ct_cnv)
+
+                    out['tl_heat'] = tl_heat
+                    out['br_heat'] = br_heat
+                    out['ct_heat'] = ct_heat
+                    out['tl_tag'] = tl_tag
+                    out['br_tag'] = br_tag
+                    out['tl_regr'] = tl_regr
+                    out['br_regr'] = br_regr
+                    out['ct_regr'] = ct_regr
+                
+                outs.append(out)
+                if ind < self.nstack - 1:
+                    inter = self.inters_[ind](inter) + self.cnvs_[ind](cnv)
+                    inter = self.relu(inter)
+                    inter = self.inters[ind](inter)
             if zjb:
-                self.heads = {'hps': 34,'hm_hp': 17, 'hp_offset': 2}
-
-            for head in self.heads:
-                layer = self.__getattr__(head)[ind]
-                y = layer(cnv)
-                out[head] = y
-
-            #centernet-T
-            if zjb:
-                print("CCCCCCCCCCCCC")
-                tl_inds = input['tl_tags']
-                br_inds = input['br_tags']
-                ct_inds = input['ct_tags']
-
-                tl_cnv = self.tl_cnvs[ind](cnv)
-                br_cnv = self.br_cnvs[ind](cnv)
-                ct_cnv = self.ct_cnvs[ind](cnv)
-
-                tl_heat, br_heat, ct_heat = self.tl_heats[ind](tl_cnv), self.br_heats[ind](br_cnv), self.ct_heats[ind](ct_cnv)
-                tl_tag, br_tag        = self.tl_tags[ind](tl_cnv),  self.br_tags[ind](br_cnv)
-                tl_regr, br_regr, ct_regr = self.tl_regrs[ind](tl_cnv), self.br_regrs[ind](br_cnv), self.ct_regrs[ind](ct_cnv)
-
-                tl_tag  = _tranpose_and_gather_feat(tl_tag, tl_inds)
-                br_tag  = _tranpose_and_gather_feat(br_tag, br_inds)
-                tl_regr = _tranpose_and_gather_feat(tl_regr, tl_inds)
-                br_regr = _tranpose_and_gather_feat(br_regr, br_inds)
-                ct_regr = _tranpose_and_gather_feat(ct_regr, ct_inds)
-
-                out['tl_heat'] = tl_heat
-                out['br_heat'] = br_heat
-                out['ct_heat'] = ct_heat
-                out['tl_tag'] = tl_tag
-                out['br_tag'] = br_tag
-                out['tl_regr'] = tl_regr
-                out['br_regr'] = br_regr
-                out['ct_regr'] = ct_regr
-            
-            outs.append(out)
-            if ind < self.nstack - 1:
-                inter = self.inters_[ind](inter) + self.cnvs_[ind](cnv)
-                inter = self.relu(inter)
-                inter = self.inters[ind](inter)
-        return outs
+                return outs
+            else:
+                return outs
 
 
 def make_hg_layer(kernel, dim0, dim1, mod, layer=convolution, **kwargs):
@@ -383,5 +436,5 @@ class HourglassNet(exkp):
         )
 
 def get_large_hourglass_net(num_layers, heads, head_conv):
-  model = HourglassNet(heads, 2)
+  model = HourglassNet(heads, 2) #the sam as opt.py 253
   return model

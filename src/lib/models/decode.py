@@ -5,6 +5,7 @@ from __future__ import print_function
 import torch
 import torch.nn as nn
 from .utils import _gather_feat, _tranpose_and_gather_feat
+import numpy as np
 
 def _nms(heat, kernel=3):
     pad = (kernel - 1) // 2
@@ -493,6 +494,256 @@ def ctdet_decode(heat, wh, reg=None, cat_spec_wh=False, K=100):
     detections = torch.cat([bboxes, scores, clses], dim=2)
       
     return detections
+
+def multi_pose_decode_c(output, kps, hm_hp=None, hp_offset=None, K=100):
+  kernel = 3
+  ae_threshold = 0.4
+  num_dets = 1000
+  tl_heat = output['tl_heat']
+  br_heat = output['br_heat']
+  ct_heat = output['ct_heat']
+  tl_tag =  output['tl_tag']
+  br_tag =  output['br_tag']
+  tl_regr = output['tl_regr']
+  br_regr = output['br_regr']
+  ct_regr = output['ct_regr']
+  batch, cat, height, width = tl_heat.size()
+  num_joints = kps.shape[1] // 2
+
+  tl_heat = torch.sigmoid(tl_heat)
+  br_heat = torch.sigmoid(br_heat)
+  ct_heat = torch.sigmoid(ct_heat)
+
+  # perform nms on heatmaps
+  tl_heat = _nms(tl_heat, kernel=kernel)
+  br_heat = _nms(br_heat, kernel=kernel)
+  ct_heat = _nms(ct_heat, kernel=kernel)
+
+  tl_scores, tl_inds, tl_clses, tl_ys, tl_xs = _topk(tl_heat, K=K)
+  br_scores, br_inds, br_clses, br_ys, br_xs = _topk(br_heat, K=K)
+  ct_scores, ct_inds, ct_clses, ct_ys, ct_xs = _topk(ct_heat, K=K)
+
+  # scores, inds, clses, ys, xs = _topk(ct_heat, K=K)
+
+  tl_ys = tl_ys.view(batch, K, 1).expand(batch, K, K)
+  tl_xs = tl_xs.view(batch, K, 1).expand(batch, K, K)
+  br_ys = br_ys.view(batch, 1, K).expand(batch, K, K)
+  br_xs = br_xs.view(batch, 1, K).expand(batch, K, K)
+  ct_ys = ct_ys.view(batch, 1, K).expand(batch, K, K)
+  ct_xs = ct_xs.view(batch, 1, K).expand(batch, K, K)
+
+  if tl_regr is not None and br_regr is not None:
+      tl_regr = _tranpose_and_gather_feat(tl_regr, tl_inds)
+      tl_regr = tl_regr.view(batch, K, 1, 2)
+      br_regr = _tranpose_and_gather_feat(br_regr, br_inds)
+      br_regr = br_regr.view(batch, 1, K, 2)
+      ct_regr = _tranpose_and_gather_feat(ct_regr, ct_inds)
+      ct_regr = ct_regr.view(batch, 1, K, 2)
+
+      tl_xs = tl_xs + tl_regr[..., 0]
+      tl_ys = tl_ys + tl_regr[..., 1]
+      br_xs = br_xs + br_regr[..., 0]
+      br_ys = br_ys + br_regr[..., 1]
+      ct_xs = ct_xs + ct_regr[..., 0]
+      ct_ys = ct_ys + ct_regr[..., 1]
+
+    # all possible boxes based on top k corners (ignoring class)
+  bboxes = torch.stack((tl_xs, tl_ys, br_xs, br_ys), dim=3)
+
+  tl_tag = _tranpose_and_gather_feat(tl_tag, tl_inds)
+  tl_tag = tl_tag.view(batch, K, 1)
+  br_tag = _tranpose_and_gather_feat(br_tag, br_inds)
+  br_tag = br_tag.view(batch, 1, K)
+  dists  = torch.abs(tl_tag - br_tag)
+
+  tl_scores = tl_scores.view(batch, K, 1).expand(batch, K, K)
+  br_scores = br_scores.view(batch, 1, K).expand(batch, K, K)
+  scores    = (tl_scores + br_scores) / 2
+
+    # reject boxes based on classes
+  tl_clses = tl_clses.view(batch, K, 1).expand(batch, K, K)
+  br_clses = br_clses.view(batch, 1, K).expand(batch, K, K)
+  cls_inds = (tl_clses != br_clses)
+
+    # reject boxes based on distances
+  dist_inds = (dists > ae_threshold)
+
+    # reject boxes based on widths and heights
+  width_inds  = (br_xs < tl_xs)
+  height_inds = (br_ys < tl_ys)
+
+  scores[cls_inds]    = -1
+  scores[dist_inds]   = -1
+  scores[width_inds]  = -1
+  scores[height_inds] = -1
+
+  scores = scores.view(batch, -1)
+  scores, inds = torch.topk(scores, num_dets)
+  scores = scores.unsqueeze(2)
+
+  bboxes = bboxes.view(batch, -1, 4)
+  bboxes = _gather_feat(bboxes, inds)
+
+    #width = (bboxes[:,:,2] - bboxes[:,:,0]).unsqueeze(2)
+    #height = (bboxes[:,:,2] - bboxes[:,:,0]).unsqueeze(2)
+  clses  = tl_clses.contiguous().view(batch, -1, 1)
+  clses  = _gather_feat(clses, inds).float()
+
+  tl_scores = tl_scores.contiguous().view(batch, -1, 1)
+  tl_scores = _gather_feat(tl_scores, inds).float()
+  br_scores = br_scores.contiguous().view(batch, -1, 1)
+  br_scores = _gather_feat(br_scores, inds).float()
+
+  ct_xs = ct_xs[:,0,:]
+  ct_ys = ct_ys[:,0,:]
+
+  center = torch.cat([ct_xs.unsqueeze(2), ct_ys.unsqueeze(2), ct_clses.float().unsqueeze(2), ct_scores.unsqueeze(2)], dim=2)
+  detections = torch.cat([bboxes, scores, tl_scores, br_scores, clses], dim=2)
+  return detections, center
+
+  kps = _tranpose_and_gather_feat(kps, ct_inds)
+  kps = kps.view(batch, K, num_joints * 2)
+  kps[..., ::2] += ct_xs.view(batch, K, 1).expand(batch, K, num_joints)
+  kps[..., 1::2] += ct_ys.view(batch, K, 1).expand(batch, K, num_joints)
+  ## if reg is not None:
+  ##   reg = _tranpose_and_gather_feat(reg, inds)
+  ##   reg = reg.view(batch, K, 2)
+  ##   xs = xs.view(batch, K, 1) + reg[:, :, 0:1]
+  ##   ys = ys.view(batch, K, 1) + reg[:, :, 1:2]
+  ## else:
+  ## xs = xs.view(batch, K, 1) + 0.5
+  ## ys = ys.view(batch, K, 1) + 0.5
+  ## wh = _tranpose_and_gather_feat(wh, inds)
+  ## wh = wh.view(batch, K, 2)
+  ## clses  = clses.view(batch, K, 1).float()
+  ## scores = scores.view(batch, K, 1)
+
+  ## bboxes = torch.cat([xs - wh[..., 0:1] / 2, 
+  ##                     ys - wh[..., 1:2] / 2,
+  ##                     xs + wh[..., 0:1] / 2, 
+  ##                     ys + wh[..., 1:2] / 2], dim=2)
+  if hm_hp is not None:
+      hm_hp = _nms(hm_hp)
+      thresh = 0.1
+      kps = kps.view(batch, K, num_joints, 2).permute(
+          0, 2, 1, 3).contiguous() # b x J x K x 2
+      reg_kps = kps.unsqueeze(3).expand(batch, num_joints, K, K, 2)
+      hm_score, hm_inds, hm_ys, hm_xs = _topk_channel(hm_hp, K=K) # b x J x K
+      if hp_offset is not None:
+          hp_offset = _tranpose_and_gather_feat(
+              hp_offset, hm_inds.view(batch, -1))
+          hp_offset = hp_offset.view(batch, num_joints, K, 2)
+          hm_xs = hm_xs + hp_offset[:, :, :, 0]
+          hm_ys = hm_ys + hp_offset[:, :, :, 1]
+      else:
+          hm_xs = hm_xs + 0.5
+          hm_ys = hm_ys + 0.5
+        
+      mask = (hm_score > thresh).float()
+      hm_score = (1 - mask) * -1 + mask * hm_score
+      hm_ys = (1 - mask) * (-10000) + mask * hm_ys
+      hm_xs = (1 - mask) * (-10000) + mask * hm_xs
+      hm_kps = torch.stack([hm_xs, hm_ys], dim=-1).unsqueeze(
+          2).expand(batch, num_joints, K, K, 2)
+      dist = (((reg_kps - hm_kps) ** 2).sum(dim=4) ** 0.5)
+      min_dist, min_ind = dist.min(dim=3) # b x J x K
+      hm_score = hm_score.gather(2, min_ind).unsqueeze(-1) # b x J x K x 1
+      min_dist = min_dist.unsqueeze(-1)
+      min_ind = min_ind.view(batch, num_joints, K, 1, 1).expand(
+          batch, num_joints, K, 1, 2)
+      hm_kps = hm_kps.gather(3, min_ind)
+      hm_kps = hm_kps.view(batch, num_joints, K, 2)
+      l = bboxes[:, :, 0].view(batch, 1, K, 1).expand(batch, num_joints, K, 1)
+      t = bboxes[:, :, 1].view(batch, 1, K, 1).expand(batch, num_joints, K, 1)
+      r = bboxes[:, :, 2].view(batch, 1, K, 1).expand(batch, num_joints, K, 1)
+      b = bboxes[:, :, 3].view(batch, 1, K, 1).expand(batch, num_joints, K, 1)
+      mask = (hm_kps[..., 0:1] < l) + (hm_kps[..., 0:1] > r) + \
+             (hm_kps[..., 1:2] < t) + (hm_kps[..., 1:2] > b) + \
+             (hm_score < thresh) + (min_dist > (torch.max(b - t, r - l) * 0.3))
+      mask = (mask > 0).float().expand(batch, num_joints, K, 2)
+      kps = (1 - mask) * hm_kps + mask * kps
+      kps = kps.permute(0, 2, 1, 3).contiguous().view(
+          batch, K, num_joints * 2)
+    
+  return detections
+
+
+def multi_pose_decode_c1(output, det_post, kps, hm_hp=None, hp_offset=None, K=100):
+
+  tl_heat = output['tl_heat']
+  batch, cat, height, width = tl_heat.size()
+  num_joints = kps.shape[1] // 2
+
+
+  K = det_post.shape[0]
+  bboxs_post = det_post[:, 0:4]
+  ct_post = np.zeros(shape=(K, 2),dtype=np.intp)
+  ct_post[:, 0] = (bboxs_post[:, 0] + bboxs_post[:, 2])/2
+  ct_post[:, 1] = (bboxs_post[:, 1] + bboxs_post[:, 3])/2
+  ct_post = np.floor(ct_post)
+  ct_inds_post = np.zeros(shape=(batch, K),dtype=np.intp)
+  ct_inds_post[0] = width * ct_post[:, 1] + ct_post[:, 0]
+  ct_inds_post = torch.from_numpy(ct_inds_post).cuda()
+  bboxes = np.zeros(shape=(batch, K, 4))
+  bboxes[0]= det_post[:, 0:4]
+  bboxes = torch.from_numpy(bboxes).type(torch.FloatTensor).cuda()
+
+  ct_xs = np.zeros(shape=(batch, K))
+  ct_xs[0] = ct_post[:, 0]
+  ct_xs = torch.from_numpy(ct_xs).type(torch.FloatTensor).cuda()
+  ct_ys = np.zeros(shape=(batch, K))
+  ct_ys[0] = ct_post[:, 1]
+  ct_ys = torch.from_numpy(ct_ys).type(torch.FloatTensor).cuda()
+
+  kps = _tranpose_and_gather_feat(kps, ct_inds_post)
+  kps = kps.view(batch, K, num_joints * 2)
+  kps[..., ::2] += ct_xs.view(batch, K, 1).expand(batch, K, num_joints)
+  kps[..., 1::2] += ct_ys.view(batch, K, 1).expand(batch, K, num_joints)
+
+  if hm_hp is not None:
+      hm_hp = _nms(hm_hp)
+      thresh = 0.1
+      kps = kps.view(batch, K, num_joints, 2).permute(
+          0, 2, 1, 3).contiguous() # b x J x K x 2
+      reg_kps = kps.unsqueeze(3).expand(batch, num_joints, K, K, 2)
+      hm_score, hm_inds, hm_ys, hm_xs = _topk_channel(hm_hp, K=K) # b x J x K
+      if hp_offset is not None:
+          hp_offset = _tranpose_and_gather_feat(
+              hp_offset, hm_inds.view(batch, -1))
+          hp_offset = hp_offset.view(batch, num_joints, K, 2)
+          hm_xs = hm_xs + hp_offset[:, :, :, 0]
+          hm_ys = hm_ys + hp_offset[:, :, :, 1]
+      else:
+          hm_xs = hm_xs + 0.5
+          hm_ys = hm_ys + 0.5
+        
+      mask = (hm_score > thresh).float()
+      hm_score = (1 - mask) * -1 + mask * hm_score
+      hm_ys = (1 - mask) * (-10000) + mask * hm_ys
+      hm_xs = (1 - mask) * (-10000) + mask * hm_xs
+      hm_kps = torch.stack([hm_xs, hm_ys], dim=-1).unsqueeze(
+          2).expand(batch, num_joints, K, K, 2)
+      dist = (((reg_kps - hm_kps) ** 2).sum(dim=4) ** 0.5)
+      min_dist, min_ind = dist.min(dim=3) # b x J x K
+      hm_score = hm_score.gather(2, min_ind).unsqueeze(-1) # b x J x K x 1
+      min_dist = min_dist.unsqueeze(-1)
+      min_ind = min_ind.view(batch, num_joints, K, 1, 1).expand(
+          batch, num_joints, K, 1, 2)
+      hm_kps = hm_kps.gather(3, min_ind)
+      hm_kps = hm_kps.view(batch, num_joints, K, 2)
+      l = bboxes[:, :, 0].view(batch, 1, K, 1).expand(batch, num_joints, K, 1)
+      t = bboxes[:, :, 1].view(batch, 1, K, 1).expand(batch, num_joints, K, 1)
+      r = bboxes[:, :, 2].view(batch, 1, K, 1).expand(batch, num_joints, K, 1)
+      b = bboxes[:, :, 3].view(batch, 1, K, 1).expand(batch, num_joints, K, 1)
+      mask = (hm_kps[..., 0:1] < l) + (hm_kps[..., 0:1] > r) + \
+             (hm_kps[..., 1:2] < t) + (hm_kps[..., 1:2] > b) + \
+             (hm_score < thresh) + (min_dist > (torch.max(b - t, r - l) * 0.3))
+      mask = (mask > 0).float().expand(batch, num_joints, K, 2)
+      kps = (1 - mask) * hm_kps + mask * kps
+      kps = kps.permute(0, 2, 1, 3).contiguous().view(
+          batch, K, num_joints * 2)
+    
+  return kps
 
 def multi_pose_decode(
     heat, wh, kps, reg=None, hm_hp=None, hp_offset=None, K=100):

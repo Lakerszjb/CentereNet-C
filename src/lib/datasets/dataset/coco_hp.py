@@ -105,7 +105,7 @@ class COCOHP(data.Dataset):
 
 
   def run_eval(self, results, save_dir):
-    # result_json = os.path.join(opt.save_dir, "results.json")
+    # result_json = os.path.join(save_dir, "results.json")
     # detections  = convert_eval_format(all_boxes)
     # json.dump(detections, open(result_json, "w"))
     self.save_results(results, save_dir)
@@ -118,3 +118,18 @@ class COCOHP(data.Dataset):
     coco_eval.evaluate()
     coco_eval.accumulate()
     coco_eval.summarize()
+
+# if __name__ == '__main__':
+#     result_json = os.path.join('../../../../exp/multi_pose/hg_1x/', "results.json")
+#     detections = convert_eval_format(all_boxes)
+#     json.dump(detections, open(result_json, "w"))
+#     self.save_results(results, save_dir)
+#     coco_dets = self.coco.loadRes('{}/results.json'.format(save_dir))
+#     coco_eval = COCOeval(self.coco, coco_dets, "keypoints")
+#     coco_eval.evaluate()
+#     coco_eval.accumulate()
+#     coco_eval.summarize()
+#     coco_eval = COCOeval(self.coco, coco_dets, "bbox")
+#     coco_eval.evaluate()
+#     coco_eval.accumulate()
+#     coco_eval.summarize()
