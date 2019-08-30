@@ -25,8 +25,8 @@ class PrefetchDataset(torch.utils.data.Dataset):
   def __init__(self, opt, dataset, pre_process_func):
     self.images = dataset.images
     self.load_image_func = dataset.coco.loadImgs
-    # self.load_ann_ids = dataset.coco.getAnnIds
-    # self.load_anns = dataset.coco.loadAnns
+    self.load_ann_ids = dataset.coco.getAnnIds
+    self.load_anns = dataset.coco.loadAnns
     self.img_dir = dataset.img_dir
     self.pre_process_func = pre_process_func
     self.opt = opt
@@ -37,8 +37,8 @@ class PrefetchDataset(torch.utils.data.Dataset):
     img_path = os.path.join(self.img_dir, img_info['file_name'])
     image = cv2.imread(img_path)
     images, meta = {}, {}
-    # ann_ids = self.load_ann_ids(imgIds=[img_id])
-    # anns = self.load_anns(ids=ann_ids)
+    ann_ids = self.load_ann_ids(imgIds=[img_id])
+    anns = self.load_anns(ids=ann_ids)
 
 
     for scale in opt.test_scales:
@@ -46,7 +46,7 @@ class PrefetchDataset(torch.utils.data.Dataset):
         images[scale], meta[scale] = self.pre_process_func(
           image, scale, img_info['calib'])
       else:
-        images[scale], meta[scale] = self.pre_process_func(image, scale)
+        images[scale], meta[scale] = self.pre_process_func(image, anns, scale)
     return img_id, {'images': images, 'image': image, 'meta': meta}
 
   def __len__(self):
@@ -75,7 +75,7 @@ def prefetch_test(opt):
   time_stats = ['tot', 'load', 'pre', 'net', 'dec', 'post', 'merge']
   avg_time_stats = {t: AverageMeter() for t in time_stats}
   for ind, (img_id, pre_processed_images) in enumerate(data_loader):
-    # if ind > 100 :
+    # if ind > 50 :
     #     break
     ret = detector.run(pre_processed_images)
     results[img_id.numpy().astype(np.int32)[0]] = ret['results']

@@ -33,7 +33,8 @@ class MultiPoseDetector(BaseDetector):
       if self.opt.zjb:
         all_out = self.model(images)
         output = all_out[-1]
-        #output['hm_hp'] = self.gt[0]['hm_hp'].cuda()
+        #gt
+        output['hm_hp'] = self.gt[0]['hm_hp'].cuda()
         if self.opt.hm_hp and not self.opt.mse_loss:
           output['hm_hp'] = output['hm_hp'].sigmoid_()
 
@@ -140,10 +141,18 @@ class MultiPoseDetector(BaseDetector):
         detections = detections[nms_inds]
         classes = classes[nms_inds]
 
+        #gt
+        # det_gt = self.gt[0]['gt_det']
+        # detections = np.ones((len(det_gt), 8))
+        # for i in range(len(det_gt)):
+        #   detections[i][:4] = det_gt[i].numpy()
+        #   detections[i][7] = 0
+        #
         # if detections.shape[0] == 0:
         #   self.non_person += 1
         #   print("nonperson"+str(self.non_person))
-        #   dets = np.zeros(shape=(1, 1, 30))
+        #   self.last_dets[0][0, :, 4] = 0
+        #   self.last_dets[0] = np.zeros(shape=(1, 1, 6+34))
         #   if return_time:
         #     return output, self.last_dets[0], forward_time
         #   else:
